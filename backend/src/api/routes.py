@@ -215,7 +215,16 @@ async def download_export(db: Session = Depends(get_db)):
                 raise HTTPException(status_code=500, detail=f"Download failed: {zip_path.get('message')}")
             
             if not zip_path:
-                raise HTTPException(status_code=500, detail="Download failed: Button not found or timeout.")
+                request_sent = automator.page.get_by_role("button", name="Request sent").first if automator.page else None
+                if request_sent and await request_sent.is_visible() and not await request_sent.is_enabled():
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Oura has received the export request, but the file is not ready yet. Wait for Oura to finish preparing it, then try Download Latest again.",
+                    )
+                raise HTTPException(
+                    status_code=404,
+                    detail="No downloadable Oura export was found. Request a new export or wait for the current request to finish.",
+                )
 
             # Ingest
             parser = OuraParser(db)

@@ -5,12 +5,26 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const electron_1 = require("electron");
 const path_1 = __importDefault(require("path"));
+const net_1 = __importDefault(require("net"));
 const child_process_1 = require("child_process");
-let mainWindow;
+let mainWindow = null;
 let pythonProcess = null;
 let tray = null;
 let isQuitting = false;
+let backendPort = 8000;
 const isDev = process.env.NODE_ENV === 'development';
+function findOpenPort(startPort) {
+    return new Promise((resolve) => {
+        const server = net_1.default.createServer();
+        server.unref();
+        server.on('error', () => resolve(findOpenPort(startPort + 1)));
+        server.listen(startPort, '127.0.0.1', () => {
+            const addr = server.address();
+            const port = typeof addr === 'string' ? startPort : (addr?.port ?? startPort);
+            server.close(() => resolve(port));
+        });
+    });
+}
 function createTray() {
     // We are in shell/electron/main.ts (compiled to dist-electron/main.js)
     // So __dirname is shell/dist-electron
@@ -74,7 +88,7 @@ function createWindow() {
         show: false, // Don't show until ready
         title: 'Cracked Oura',
     });
-    const devUrl = 'http://localhost:5173';
+    const devUrl = `http://localhost:5173?port=${backendPort}`;
     const prodPath = path_1.default.join(__dirname, '../dist/index.html');
     if (isDev) {
         logToDesktop(`Loading DEV URL: ${devUrl}`);
@@ -82,8 +96,8 @@ function createWindow() {
         // mainWindow.webContents.openDevTools();
     }
     else {
-        logToDesktop(`Loading PROD File: ${prodPath}`);
-        mainWindow.loadFile(prodPath).catch(err => {
+        logToDesktop(`Loading PROD File: ${prodPath} (port=${backendPort})`);
+        mainWindow.loadFile(prodPath, { query: { port: backendPort.toString() } }).catch(err => {
             logToDesktop(`FAILED to load file: ${err.message}`);
         });
     }
@@ -157,7 +171,7 @@ function startPythonBackend() {
             '-m', 'uvicorn',
             'backend.src.api.main:app',
             '--host', '127.0.0.1',
-            '--port', '8000',
+            '--port', backendPort.toString(),
             '--reload'
         ], {
             cwd: path_1.default.join(__dirname, '../../'),
@@ -178,7 +192,7 @@ function startPythonBackend() {
             pythonProcess = (0, child_process_1.spawn)(exePath, [], {
                 cwd: path_1.default.dirname(exePath), // Run from its own directory to find dependencies/relative files
                 stdio: ['ignore', 'pipe', 'pipe'], // Capture stdout/stderr
-                env: { ...process.env, PORT: '8000' } // Pass port if needed
+                env: { ...process.env, PORT: backendPort.toString() }
             });
             logToDesktop(`Backend process spawned with PID: ${pythonProcess ? pythonProcess.pid : 'NULL'}`);
         }
@@ -212,7 +226,9 @@ function startPythonBackend() {
         logToDesktop("pythonProcess is undefined after attempt!");
     }
 }
-electron_1.app.on('ready', () => {
+electron_1.app.on('ready', async () => {
+    backendPort = await findOpenPort(8000);
+    logToDesktop(`Using backend port: ${backendPort}`);
     startPythonBackend();
     createWindow();
     createTray();
